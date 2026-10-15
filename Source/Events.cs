@@ -45,7 +45,7 @@ namespace DiscordStatus
                 DSLog.Log(1, $"Map {_g.MapName} changed to {mapName}!");
                 if (!_g.WConfig.NewMapNotification) return;
                 var playercounts = Utilities.GetPlayers().Where(_chores.IsPlayerValid).Count();
-                _webhook.NewMap(mapName, playercounts);
+                _ = Task.Run(() => DiscordOperation.RunAsync(() => _webhook.NewMap(mapName, playercounts), "map notification"));
                 _g.MapName = mapName;
             }
         }
@@ -141,7 +141,7 @@ namespace DiscordStatus
             var _teams = Utilities.FindAllEntitiesByDesignerName<CCSTeam>("cs_team_manager");
             _chores.GetScore(_teams);
             var mvp = _g.TScore >= _g.CTScore ? _g.TPlayersName.FirstOrDefault() : _g.CtPlayersName.FirstOrDefault();
-            Task.Run(() => _webhook.GameEnd(mvp));
+            Task.Run(() => DiscordOperation.RunAsync(() => _webhook.GameEnd(mvp), "scoreboard"));
             return HookResult.Continue;
         }
     }

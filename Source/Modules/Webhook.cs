@@ -11,22 +11,44 @@ namespace DiscordStatus
         private EmbedConfig EConfig => _g.EConfig;
         private GeneralConfig GConfig => _g.GConfig;
 
+        private readonly Func<string, DiscordWebhookClient> _createClient;
+
         public Webhook(IChores chores, Globals globals)
+            : this(chores, globals, url => CreateClient(url)) { }
+
+        internal Webhook(IChores chores, Globals globals, Func<string, DiscordWebhookClient> createClient)
         {
             _g = globals;
             _chores = chores;
+            _createClient = createClient;
         }
 
-        private List<DiscordWebhookClient> CreateWebhookClients(string url)
+        internal static DiscordWebhookClient CreateClient(string url, Discord.Net.Rest.RestClientProvider? provider = null)
         {
-            List<DiscordWebhookClient> clients = new();
+            // Discord.Net's URL constructor performs HTTP before returning a client.
+            // Own the transport so constructor failure does not leak it.
+            Discord.Net.Rest.IRestClient? transport = null;
+            var config = new Discord.Rest.DiscordRestConfig
+            {
+                RestClientProvider = uri => transport = (provider ?? Discord.Net.Rest.DefaultRestClientProvider.Instance)(uri)
+            };
+            try { return new DiscordWebhookClient(url, config); }
+            catch { transport?.Dispose(); throw; }
+        }
+
+        private IEnumerable<DiscordWebhookClient> CreateWebhookClients(string url)
+        {
+            var count = 0;
 
             string[] list = url.Split(',', StringSplitOptions.TrimEntries);
             foreach (string u in list)
             {
                 if (_chores.IsURLValid(u))
                 {
-                    clients.Add(new DiscordWebhookClient(u));
+                    // Dispose each client on success, exception, or early enumeration exit.
+                    using var client = _createClient(u);
+                    count++;
+                    yield return client;
                 }
                 else
                 {
@@ -34,12 +56,11 @@ namespace DiscordStatus
                 }
             }
 
-            if (clients.Count == 0)
+            if (count == 0)
             {
                 DSLog.Log(2, "No valid webhook URLs provided.");
             }
 
-            return clients;
         }
 
         public async Task InitialMessageAsync()
@@ -47,7 +68,7 @@ namespace DiscordStatus
             DSLog.Log(0, "Initializing Embed");
             try
             {
-                List<DiscordWebhookClient> webhookClients = CreateWebhookClients(WConfig.StatusWebhookURL);
+                IEnumerable<DiscordWebhookClient> webhookClients = CreateWebhookClients(WConfig.StatusWebhookURL);
                 foreach (DiscordWebhookClient webhookClient in webhookClients)
                 {
                     if (webhookClient == null)
@@ -66,25 +87,22 @@ namespace DiscordStatus
                     {
                         _g.MessageID = WConfig.StatusMessageID;
                         Embed embed = CreateStatusEmbed();
-                        using (webhookClient) // Dispose of the client after use
+                        await webhookClient.ModifyMessageAsync(_g.MessageID, properties =>
                         {
-                            await webhookClient.ModifyMessageAsync(_g.MessageID, properties =>
-                            {
-                                properties.Embeds = new[] { embed };
-                            });
-                        }
+                            properties.Embeds = new[] { embed };
+                        });
                     }
                 }
             }
             catch (Exception ex)
             {
-                DSLog.Log(2, "Failed Initializing: " + ex.ToString());
+                DSLog.Log(2, $"Failed Initializing ({ex.GetType().Name}).");
             }
         }
 
         public async Task UpdateEmbed()
         {
-            List<DiscordWebhookClient> webhookClients = CreateWebhookClients(WConfig.StatusWebhookURL);
+            IEnumerable<DiscordWebhookClient> webhookClients = CreateWebhookClients(WConfig.StatusWebhookURL);
             foreach (DiscordWebhookClient webhookClient in webhookClients)
             {
                 if (webhookClient == null)
@@ -94,18 +112,15 @@ namespace DiscordStatus
 
                 try
                 {
-                    using (webhookClient) // Dispose of the client after use
+                    await webhookClient.ModifyMessageAsync(_g.MessageID, properties =>
                     {
-                        await webhookClient.ModifyMessageAsync(_g.MessageID, properties =>
-                        {
-                            properties.Embeds = new[] { CreateStatusEmbed() };
-                        });
-                    }
+                        properties.Embeds = new[] { CreateStatusEmbed() };
+                    });
                     DSLog.Log(1, $"Updated embed!");
                 }
                 catch (Exception ex)
                 {
-                    DSLog.Log(2, $"Error updating embed: {ex.Message}");
+                    DSLog.Log(2, $"Error updating embed ({ex.GetType().Name}).");
                 }
             }
         }
@@ -161,7 +176,7 @@ namespace DiscordStatus
 
         public async Task RequestPlayers(string name)
         {
-            List<DiscordWebhookClient> webhookClients = CreateWebhookClients(WConfig.RequestPlayersURL);
+            IEnumerable<DiscordWebhookClient> webhookClients = CreateWebhookClients(WConfig.RequestPlayersURL);
             foreach (DiscordWebhookClient webhookClient in webhookClients)
             {
                 if (webhookClient == null)
@@ -179,16 +194,13 @@ namespace DiscordStatus
                     .WithCurrentTimestamp();
                 _ = _chores.IsURLValid(EConfig.RequestImg) ? builder.WithImageUrl(EConfig.RequestImg.Replace("{MAPNAME}", _g.MapName)) : null;
                 _ = builder.Build();
-                using (webhookClient) // Dispose of the client after use
-                {
-                    await webhookClient.SendMessageAsync(embeds: new[] { builder.Build() });
-                }
+                await webhookClient.SendMessageAsync(embeds: new[] { builder.Build() });
             }
         }
 
         public async Task NewMap(string mapname, int counts)
         {
-            List<DiscordWebhookClient> webhookClients = CreateWebhookClients(WConfig.NotifyWebhookURL);
+            IEnumerable<DiscordWebhookClient> webhookClients = CreateWebhookClients(WConfig.NotifyWebhookURL);
             foreach (DiscordWebhookClient webhookClient in webhookClients)
             {
                 if (webhookClient == null)
@@ -207,16 +219,13 @@ namespace DiscordStatus
                 _ = _chores.IsURLValid(_g.ConnectURL) ? builder.WithUrl(_g.ConnectURL) : null;
                 _ = _chores.IsURLValid(EConfig.MapImg) ? builder.WithImageUrl(EConfig.MapImg.Replace("{MAPNAME}", mapname)) : null;
                 _ = builder.Build();
-                using (webhookClient) // Dispose of the client after use
-                {
-                    _ = await webhookClient.SendMessageAsync(embeds: new[] { builder.Build() });
-                }
+                _ = await webhookClient.SendMessageAsync(embeds: new[] { builder.Build() });
             }
         }
 
         public async Task GameEnd(string mvp)
         {
-            List<DiscordWebhookClient> webhookClients = CreateWebhookClients(WConfig.ScoreboardURL);
+            IEnumerable<DiscordWebhookClient> webhookClients = CreateWebhookClients(WConfig.ScoreboardURL);
             foreach (DiscordWebhookClient webhookClient in webhookClients)
             {
                 if (webhookClient == null)
@@ -252,10 +261,7 @@ namespace DiscordStatus
                         .AddField(EConfig.TField.Replace("{SCORE}", _g.TScore.ToString()), tnames, inline: EConfig.PlayersInline)
                         .WithColor(_chores.GetEmbedColor())
                         .WithCurrentTimestamp();
-                    using (webhookClient) // Dispose of the client after use
-                    {
-                        _ = await webhookClient.SendMessageAsync(embeds: new[] { builder.Build() });
-                    }
+                    _ = await webhookClient.SendMessageAsync(embeds: new[] { builder.Build() });
                 }
             }
         }
@@ -263,7 +269,7 @@ namespace DiscordStatus
         public async Task ServerOffiline()
         {
             long timestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
-            List<DiscordWebhookClient> webhookClients = CreateWebhookClients(WConfig.StatusWebhookURL);
+            IEnumerable<DiscordWebhookClient> webhookClients = CreateWebhookClients(WConfig.StatusWebhookURL);
             foreach (DiscordWebhookClient webhookClient in webhookClients)
             {
                 if (webhookClient == null)
@@ -280,10 +286,7 @@ namespace DiscordStatus
                     _ = _chores.IsURLValid(EConfig.OfflineImg) ? builder.WithImageUrl(EConfig.OfflineImg) : null;
                     properties.Embeds = new[] { builder.Build() };
                 });
-                using (webhookClient) // Dispose of the client after use
-                {
-                    // Additional logic if needed after modifying the message
-                }
+
             }
         }
     }

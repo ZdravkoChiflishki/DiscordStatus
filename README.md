@@ -1,4 +1,6 @@
 # Discord Status
+
+> **Maintenance fork:** see [FORK.md](FORK.md) for the crash-containment patch, independent release artifacts, build/test instructions, and known limitations. The original upstream documentation follows.
 This CSSharp plugin allows monitoring server status from discord with cute embeds and nameformat support.
 
 ## Requirments

@@ -51,9 +51,10 @@ namespace DiscordStatus
 
         public override void Unload(bool hotReload)
         {
-            _webhook.ServerOffiline();
             _update?.Stop();
             _update?.Dispose();
+            // The Discord.Net constructor can block on HTTP; never do that on unload's game thread.
+            _ = Task.Run(() => DiscordOperation.RunAsync(_webhook.ServerOffiline, "offline update"));
             DSLog.Log(2, $"{ModuleName} version {ModuleVersion} unloaded");
         }
 
@@ -89,9 +90,7 @@ namespace DiscordStatus
             await _webhook.InitialMessageAsync();
             if (_g.MessageID != 0)
             {
-                _update = new System.Timers.Timer(TimeSpan.FromSeconds(_g.GConfig.UpdateInterval).TotalMilliseconds);
-                _update.Elapsed += async (sender, e) => await UpdateAsync();
-                _update.Start();
+                _update = DiscordOperation.StartTimer(TimeSpan.FromSeconds(_g.GConfig.UpdateInterval), UpdateAsync);
                 DSLog.Log(1, "Initialization completed successfully!");
             }
         }

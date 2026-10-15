@@ -21,13 +21,13 @@ namespace DiscordStatus
                     DSLog.LogToChat(player, "{RED}Command is on global cooldown. Please wait.");
                     return;
                 }
-                await _webhook.RequestPlayers(player.PlayerName);
+                if (!await DiscordOperation.RunAsync(() => _webhook.RequestPlayers(player.PlayerName), "player request")) return;
                 SetGlobalCooldown();
                 DSLog.LogToChat(player, "{GREEN}Request Sent");
             }
             else
             {
-                await _webhook.RequestPlayers("Admin");
+                if (!await DiscordOperation.RunAsync(() => _webhook.RequestPlayers("Admin"), "player request")) return;
                 DSLog.Log(1, $"Request sent");
             }
         }
@@ -41,7 +41,7 @@ namespace DiscordStatus
             var names = command.ArgString;
             _g.NameFormat = names;
             await ConfigManager.SaveAsync("EmbedConfig", "NameFormat", names);
-            await UpdateAsync();
+            await DiscordOperation.RunAsync(UpdateAsync, "manual status update");
             _update.Start();
             if (!_chores.IsPlayerValid(player)) return;
             DSLog.LogToChat(player, $"{{GREEN}}Name format updated to '{names}'!");
@@ -53,7 +53,7 @@ namespace DiscordStatus
         {
             _update.Stop();
             await ConfigManager.UpdateAsync(_g);
-            await UpdateAsync();
+            await DiscordOperation.RunAsync(UpdateAsync, "manual status update");
             _update.Start();
             if (!_chores.IsPlayerValid(player)) return;
             DSLog.LogToChat(player, $"color: {_g.EConfig.RandomColor}{_chores.GetEmbedColor()}");
